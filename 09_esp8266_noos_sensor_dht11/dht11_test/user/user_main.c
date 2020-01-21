@@ -108,16 +108,16 @@ user_init(void)
 		hw_delay_ms(3000);
 		if(hw_dht11_read(&dht11_data) == HW_ERR_OK)
 		{
-			os_printf("物業:%d.%d %%\n",dht11_data.humidity_h,dht11_data.humidity_l);
+			HW_DEBUG("物業:%d.%d %%\n",dht11_data.humidity_h,dht11_data.humidity_l);
 			if(dht11_data.negative)
-				os_printf("梁業業:-%d.%d *C\n",dht11_data.temperature_h,dht11_data.temperature_l);
+				HW_DEBUG("梁業業:-%d.%d *C\n",dht11_data.temperature_h,dht11_data.temperature_l);
 			else
-				os_printf("梁業業:%d.%d *C\n",dht11_data.temperature_h,dht11_data.temperature_l);
+				HW_DEBUG("梁業業:%d.%d *C\n",dht11_data.temperature_h,dht11_data.temperature_l);
 		}
 		else
-			os_printf("dht11 read error\n");
-	}
+			HW_DEBUG("dht11 read error\n");
 
+	}
 
 }
 

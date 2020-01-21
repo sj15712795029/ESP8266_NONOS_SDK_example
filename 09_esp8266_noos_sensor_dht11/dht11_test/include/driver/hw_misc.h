@@ -14,7 +14,11 @@
 
 #include "driver/hw_conf.h"
 
-#define HW_DEBUG(format,...) {if (DEBUG_ENABLE > 0) os_printf(format,##__VA_ARGS__);}
+#if DEBUG_ENABLE > 0
+#define HW_DEBUG os_printf
+#else
+#define HW_DEBUG
+#endif
 
 typedef enum
 {
