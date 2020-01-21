@@ -1,0 +1,4 @@
+# 此部分为ESP826 NOOS的系统接口
+参照2c-esp8266_non_os_sdk_api_reference_cn.pdf 3.3系统接口看门狗测试
+例子：3_esp9266_noos_sys_interface延时不能超过3s,否则会因为不喂狗导致系统重启，此部分优化延时函数
+
