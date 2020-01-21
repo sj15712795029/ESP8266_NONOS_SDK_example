@@ -65,9 +65,6 @@
 #error "The flash map is not supported"
 #endif
 
-//#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM                SYSTEM_PARTITION_CUSTOMER_BEGIN
-
-//uint32 priv_param_start_sec;
 
 static const partition_item_t at_partition_table[] = {
     { SYSTEM_PARTITION_BOOTLOADER, 						0x0, 												0x1000},
