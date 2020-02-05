@@ -118,7 +118,6 @@ void ICACHE_FLASH_ATTR json_test(void)
 void ICACHE_FLASH_ATTR
 user_init(void)
 {
-	struct station_config sta_config;
 	uart_init(BIT_RATE_115200,BIT_RATE_115200);
 
 	HW_DEBUG("\n---------------------------\n");
