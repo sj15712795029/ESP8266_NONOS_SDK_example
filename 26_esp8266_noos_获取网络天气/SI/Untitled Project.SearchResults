@@ -1,0 +1,7 @@
+---- GET_STRING_CITY_ID Matches (6 in 3 files) ----
+eagle.S (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\bin):    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,PRIVATE_KEY,CITY_STRING,DNS_SERVER);
+eagle.S (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\bin):    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,CITY_ID,DNS_SERVER,APP_CODE);
+User_main.c (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\app\user):    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,PRIVATE_KEY,CITY_STRING,DNS_SERVER);
+User_main.c (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\app\user):    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,CITY_ID,DNS_SERVER,APP_CODE);
+Weather.h (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\app\include\weather):#define GET_STRING_CITY_ID "GET  /weather/query?cityid=%d HTTP/1.1\r\nHost: %s\r\nX-Bce-Signature: AppCode/%s\r\n\r\n"
+Weather.h (d:\rtos\！！！！产品发布资料\esp8266_wifi_mcu\0-系统源码\26_esp8266_noos_获取网络天气\app\include\weather):#define GET_STRING_CITY_ID "GET /v3/weather/now.json?key=%s&location=%s&language=en HTTP/1.1\r\nContent-Type: text/html;charset=utf-8\r\nHost: %s\r\n\r\n"

@@ -1,0 +1,405 @@
+/*
+ * ESPRESSIF MIT License
+ *
+ * Copyright (c) 2016 <ESPRESSIF SYSTEMS (SHANGHAI) PTE LTD>
+ *
+ * Permission is hereby granted for use on ESPRESSIF SYSTEMS ESP8266 only, in which case,
+ * it is free of charge, to any person obtaining a copy of this software and associated
+ * documentation files (the "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ */
+
+#include "osapi.h"
+#include "user_interface.h"
+#include "smartconfig.h"
+#include "airkiss.h"
+#include "espconn.h"
+#include "ip_addr.h"
+#include "mem.h"
+#include "sntp.h"
+#include "driver/hw_wrapper.h"
+#include "weather/weather.h"
+
+
+#define SPI_FLASH_SIZE_MAP 4
+#if ((SPI_FLASH_SIZE_MAP == 0) || (SPI_FLASH_SIZE_MAP == 1))
+#error "The flash map is not supported"
+#elif (SPI_FLASH_SIZE_MAP == 2)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x81000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0xfb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0xfc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0xfd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0x7c000
+#elif (SPI_FLASH_SIZE_MAP == 3)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x81000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x1fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x1fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x1fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0x7c000
+#elif (SPI_FLASH_SIZE_MAP == 4)
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x3fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x3fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x3fd000
+#elif (SPI_FLASH_SIZE_MAP == 5)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x101000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x1fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x1fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x1fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0xfc000
+#elif (SPI_FLASH_SIZE_MAP == 6)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x101000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x3fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x3fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x3fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0xfc000
+#else
+#error "The flash map is not supported"
+#endif
+
+
+
+
+
+static const partition_item_t at_partition_table[] =
+{
+    { SYSTEM_PARTITION_BOOTLOADER, 						0x0, 												0x1000},
+    { SYSTEM_PARTITION_RF_CAL,  						SYSTEM_PARTITION_RF_CAL_ADDR, 						0x1000},
+    { SYSTEM_PARTITION_PHY_DATA, 						SYSTEM_PARTITION_PHY_DATA_ADDR, 					0x1000},
+    { SYSTEM_PARTITION_SYSTEM_PARAMETER, 				SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR, 			0x3000},
+};
+
+void ICACHE_FLASH_ATTR user_pre_init(void)
+{
+    if(!system_partition_table_regist(at_partition_table, sizeof(at_partition_table)/sizeof(at_partition_table[0]),SPI_FLASH_SIZE_MAP))
+    {
+        HW_DEBUG("system_partition_table_regist fail\r\n");
+        while(1);
+    }
+}
+
+LOCAL void ICACHE_FLASH_ATTR hw_button_short_press(void)
+{
+    HW_DEBUG("hw_button_short_press\n");
+}
+
+LOCAL void ICACHE_FLASH_ATTR hw_button_long_press(void)
+{
+    HW_DEBUG("hw_button_long_press\n");
+}
+
+void ICACHE_FLASH_ATTR smartconfig_done(sc_status status, void *pdata)
+{
+    switch(status)
+    {
+    case SC_STATUS_WAIT:
+        HW_DEBUG("SC_STATUS_WAIT\n");
+        break;
+    case SC_STATUS_FIND_CHANNEL:
+        HW_DEBUG("SC_STATUS_FIND_CHANNEL\n");
+        break;
+    case SC_STATUS_GETTING_SSID_PSWD:
+        HW_DEBUG("SC_STATUS_GETTING_SSID_PSWD\n");
+        sc_type *type = pdata;
+        if (*type == SC_TYPE_ESPTOUCH)
+        {
+            HW_DEBUG("SC_TYPE:SC_TYPE_ESPTOUCH\n");
+        }
+        else
+        {
+            HW_DEBUG("SC_TYPE:SC_TYPE_AIRKISS\n");
+        }
+        break;
+    case SC_STATUS_LINK:
+        HW_DEBUG("SC_STATUS_LINK\n");
+        struct station_config *sta_conf = pdata;
+
+        wifi_station_set_config(sta_conf);
+        wifi_station_disconnect();
+        wifi_station_connect();
+        break;
+    case SC_STATUS_LINK_OVER:
+        HW_DEBUG("SC_STATUS_LINK_OVER\n");
+        if (pdata != NULL)
+        {
+            //SC_TYPE_ESPTOUCH
+            uint8 phone_ip[4] = {0};
+
+            os_memcpy(phone_ip, (uint8*)pdata, 4);
+            HW_DEBUG("Phone ip: %d.%d.%d.%d\n",phone_ip[0],phone_ip[1],phone_ip[2],phone_ip[3]);
+        }
+        else
+        {
+            //SC_TYPE_AIRKISS - support airkiss v2.0
+        }
+        smartconfig_stop();
+        break;
+    }
+
+}
+
+
+LOCAL void enter_smart_config()
+{
+    HW_DEBUG("enter_smart_config\n");
+    smartconfig_set_type(SC_TYPE_ESPTOUCH_AIRKISS); //SC_TYPE_ESPTOUCH,SC_TYPE_AIRKISS,SC_TYPE_ESPTOUCH_AIRKISS
+    smartconfig_start(smartconfig_done);
+
+    hw_oled_show_chinese(0,WAATHER_FONT_PAGE,70);
+    hw_oled_show_chinese(16,WAATHER_FONT_PAGE,71);
+    hw_oled_show_chinese(32,WAATHER_FONT_PAGE,72);
+    hw_oled_show_chinese(48,WAATHER_FONT_PAGE,73);
+    hw_oled_show_chinese(64,WAATHER_FONT_PAGE,74);
+    hw_oled_show_chinese(80,WAATHER_FONT_PAGE,75);
+    hw_oled_show_chinese(96,WAATHER_FONT_PAGE,76);
+    hw_oled_show_chinese(112,WAATHER_FONT_PAGE,77);
+}
+
+
+struct espconn http_tcp_conn;
+
+uint16_t get_weather_time_cnt = 0;
+#define GET_WEATHER_FREQ (20*60)
+uint8_t get_weather_buffer[256] = {0};
+
+void ICACHE_FLASH_ATTR http_tcp_sent_cb(void *arg)  //发送
+{
+    HW_DEBUG("http_tcp_sent_cb\n");
+}
+void ICACHE_FLASH_ATTR http_tcp_discon_cb(void *arg)  //断开
+{
+    HW_DEBUG("http_tcp_discon_cb\n");
+}
+void ICACHE_FLASH_ATTR http_tcp_recv_cb(void *arg,  //接收
+                                        char *pdata, unsigned short len)
+{
+    HW_DEBUG("\n----------- http recv data len %d-----------\n",len);
+    HW_DEBUG("%s\n", pdata);
+    HW_DEBUG("----------- http recv data end----------\n");
+    weather_parse(pdata,len);
+}
+void ICACHE_FLASH_ATTR http_tcp_recon_cb(void *arg, sint8 err) //注册 TCP 连接发生异常断开时的回调函数，可以在回调函数中进行重连
+{
+    HW_DEBUG("connect err,reason %d\r\n", err);
+    espconn_connect((struct espconn *) arg);
+}
+void ICACHE_FLASH_ATTR http_tcp_connect_cb(void *arg)  //注册 TCP 连接成功建立后的回调函数
+{
+    struct espconn *pespconn = arg;
+    HW_DEBUG("连接成功\n");
+    espconn_regist_recvcb(pespconn, http_tcp_recv_cb);  //接收
+    espconn_regist_sentcb(pespconn, http_tcp_sent_cb);  //发送
+    espconn_regist_disconcb(pespconn, http_tcp_discon_cb);  //断开
+
+#if defined SENIVERSE_WEATHER /* 心知天气 */
+    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,PRIVATE_KEY,CITY_STRING,DNS_SERVER);
+#elif defined BAIDU_WEATHER /* 百度天气 */
+    //os_sprintf(get_weather_buffer,GET_STRING_CITY_NAME,CITY_STRING,DNS_SERVER,APP_CODE);
+    os_sprintf(get_weather_buffer,GET_STRING_CITY_ID,CITY_ID,DNS_SERVER,APP_CODE);
+#endif
+    HW_DEBUG("----------- http send---------------------\n");
+    HW_DEBUG("%s",get_weather_buffer);
+    HW_DEBUG("----------- http send end-------------------\n");
+    espconn_send(&http_tcp_conn, get_weather_buffer, os_strlen(get_weather_buffer));
+}
+
+
+void ICACHE_FLASH_ATTR http_dns_found(const char *name, ip_addr_t *ipaddr,void *arg)
+{
+    if(ipaddr == NULL)
+    {
+        HW_DEBUG("DNS GET IP FAIL\n");
+        return;
+    }
+    else if (ipaddr != NULL && ipaddr->addr != 0)
+    {
+        struct ip_info info;
+        HW_DEBUG("DNS GET IP SUCCESS\n");
+        wifi_get_ip_info(STATION_IF, &info);
+        http_tcp_conn.proto.tcp = (esp_tcp *) os_zalloc(sizeof(esp_tcp));  //分配空间
+        http_tcp_conn.type = ESPCONN_TCP;  //设置类型为TCP协议
+        http_tcp_conn.proto.tcp->local_port = espconn_port();  //本地端口
+        http_tcp_conn.proto.tcp->remote_port = 80;  //目标端口
+        os_memcpy(http_tcp_conn.proto.tcp->local_ip, &info.ip, 4);
+        os_memcpy(http_tcp_conn.proto.tcp->remote_ip, ipaddr, 4);
+        //注册连接成功回调函数和重新连接回调函数
+        espconn_regist_connectcb(&http_tcp_conn, http_tcp_connect_cb);//注册 TCP 连接成功建立后的回调函数
+        espconn_regist_reconcb(&http_tcp_conn, http_tcp_recon_cb);//注册 TCP 连接发生异常断开时的回调函数，可以在回调函数中进行重连
+
+        espconn_connect(&http_tcp_conn);
+    }
+}
+
+LOCAL void tcp_connect_init()
+{
+    ip_addr_t http_server_ip;
+    espconn_gethostbyname(&http_tcp_conn, DNS_SERVER, &http_server_ip, http_dns_found);
+}
+
+
+LOCAL os_timer_t sntp_timer;
+uint8_t sntp_first_get = 1;
+
+void ICACHE_FLASH_ATTR user_check_sntp_stamp(void *arg)
+{
+    uint32	current_stamp;
+    current_stamp	=	sntp_get_current_timestamp();
+    if(current_stamp != 0)
+    {
+        /* Mon Feb 10 14:51:01 2020 从这个中解析出来14:51:01 */
+        uint8_t sntp_buf[32] = {0};
+        uint8_t time_stamp[16] = {0};
+        os_sprintf(sntp_buf,"%s",sntp_get_real_time(current_stamp));
+        //HW_DEBUG("sntp_buf %s\n",sntp_buf);
+        uint8_t *time_stamp_start = os_strchr(sntp_buf,':')-2;
+        uint8_t *time_stamp_end = os_strchr(time_stamp_start,' ');
+        os_memcpy(time_stamp,time_stamp_start,time_stamp_end-time_stamp_start);
+        //HW_DEBUG("time_stamp %s\n",time_stamp);
+        weather_time_stamp_update(time_stamp);
+
+	get_weather_time_cnt++;
+	if(get_weather_time_cnt == GET_WEATHER_FREQ)
+	{
+		get_weather_time_cnt = 0;
+		if(http_tcp_conn.state == ESPCONN_CONNECT)
+		{
+			espconn_send(&http_tcp_conn, get_weather_buffer, os_strlen(get_weather_buffer));
+		}
+		else
+		{
+			espconn_connect(&http_tcp_conn);
+		}
+	}
+	
+	if(sntp_first_get == 1)
+        {
+        	hw_oled_clear();
+            sntp_first_get = 0;
+            weather_first_time_stamp_update(time_stamp);
+            tcp_connect_init();
+            weather_ui_init();
+        }
+		
+        hw_oled_show_string(56,6,time_stamp,FONT16X8_LENGTH);
+
+        
+    }
+}
+
+void ICACHE_FLASH_ATTR esp8266_sntp_init(void)
+{
+    ip_addr_t	*addr	=	(ip_addr_t	*)os_zalloc(sizeof(ip_addr_t));
+    sntp_setservername(0,	"us.pool.ntp.org");	//	set	server	0	by	domain	name
+    sntp_setservername(1,	"ntp.sjtu.edu.cn");	//	set	server	1	by	domain	name
+    ipaddr_aton("210.72.145.44",addr);
+    sntp_setserver(2,addr);	//	set	server	2	by	IP	address
+    sntp_init();
+
+    os_free(addr);
+
+    os_timer_disarm(&sntp_timer);
+    os_timer_setfn(&sntp_timer,(os_timer_func_t *)user_check_sntp_stamp,NULL);
+    os_timer_arm(&sntp_timer, 1000, 1);
+}
+
+LOCAL void wifi_handle_event_cb(System_Event_t *evt)
+{
+    HW_DEBUG("------wifi_handle_event_cb %d---\n",evt->event);
+    switch (evt->event)
+    {
+    case EVENT_STAMODE_CONNECTED:/*连接上路由器 */
+
+        HW_DEBUG("Connected to SSID %s, Channel %d\n",
+                 evt->event_info.connected.ssid,
+                 evt->event_info.connected.channel);
+        break;
+
+    case EVENT_STAMODE_DISCONNECTED:/* 和路由器断开 */
+
+        HW_DEBUG("Disconnect from SSID %s, reason %d\n",
+                 evt->event_info.disconnected.ssid,
+                 evt->event_info.disconnected.reason);
+
+        enter_smart_config();
+
+        break;
+
+    case EVENT_STAMODE_AUTHMODE_CHANGE:
+        HW_DEBUG("mode: %u -> %u\n",
+                 evt->event_info.auth_change.old_mode,
+                 evt->event_info.auth_change.new_mode);
+        break;
+
+    case EVENT_STAMODE_GOT_IP:/* 连接上路由器,并获取了IP */
+        HW_DEBUG("IP:" IPSTR ",Mask:" IPSTR ",GW:" IPSTR "\n",
+                 IP2STR(&evt->event_info.got_ip.ip),
+                 IP2STR(&evt->event_info.got_ip.mask),
+                 IP2STR(&evt->event_info.got_ip.gw));
+        esp8266_sntp_init();
+
+        break;
+
+    case EVENT_STAMODE_DHCP_TIMEOUT:/* 连接上路由器,但是路由器给WIFI模块分配IP等信息超时了 */
+        HW_DEBUG("STA MODE_DHCP_TIMEOUT\n");
+        break;
+
+
+    default:
+        break;
+    }
+
+    HW_DEBUG("-----------------------------\n");
+}
+
+
+
+/******************************************************************************
+ * FunctionName : user_init
+ * Description  : entry of user application, init user function here
+ * Parameters   : none
+ * Returns      : none
+*******************************************************************************/
+void ICACHE_FLASH_ATTR
+user_init(void)
+{
+    struct station_config sta_config;
+
+    uart_init(BIT_RATE_115200,BIT_RATE_115200);
+    hw_led_init();
+    hw_button_init(hw_button_short_press,hw_button_long_press);
+    hw_oled_init();
+
+    HW_DEBUG("\n---------------------------\n");
+    HW_DEBUG("这是一个获取网络天气的测试工程\n");
+    HW_DEBUG("---------------------------\n");
+
+    wifi_set_opmode(STATION_MODE);
+
+    wifi_station_get_config(&sta_config);
+    if(os_strlen(sta_config.ssid) == 0)
+    {
+        HW_DEBUG("FLASH no wifi info,so direct enter smart config");
+        enter_smart_config();
+    }
+    else
+        wifi_station_connect();
+    wifi_set_event_handler_cb(wifi_handle_event_cb);
+
+}
+
