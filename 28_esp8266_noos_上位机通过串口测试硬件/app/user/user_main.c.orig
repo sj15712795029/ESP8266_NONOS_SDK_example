@@ -1,0 +1,459 @@
+/*
+ * ESPRESSIF MIT License
+ *
+ * Copyright (c) 2016 <ESPRESSIF SYSTEMS (SHANGHAI) PTE LTD>
+ *
+ * Permission is hereby granted for use on ESPRESSIF SYSTEMS ESP8266 only, in which case,
+ * it is free of charge, to any person obtaining a copy of this software and associated
+ * documentation files (the "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software is furnished
+ * to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ */
+
+#include "osapi.h"
+#include "user_interface.h"
+#include "mem.h"
+#include "airkiss.h"
+#include "smartconfig.h"
+#include "driver/hw_wrapper.h"
+#include "json/cJSON.h"
+
+
+#if ((SPI_FLASH_SIZE_MAP == 0) || (SPI_FLASH_SIZE_MAP == 1))
+#error "The flash map is not supported"
+#elif (SPI_FLASH_SIZE_MAP == 2)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x81000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0xfb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0xfc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0xfd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0x7c000
+#elif (SPI_FLASH_SIZE_MAP == 3)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x81000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x1fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x1fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x1fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0x7c000
+#elif (SPI_FLASH_SIZE_MAP == 4)
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x3fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x3fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x3fd000
+#elif (SPI_FLASH_SIZE_MAP == 5)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x101000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x1fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x1fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x1fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0xfc000
+#elif (SPI_FLASH_SIZE_MAP == 6)
+#define SYSTEM_PARTITION_OTA_SIZE							0x6A000
+#define SYSTEM_PARTITION_OTA_2_ADDR							0x101000
+#define SYSTEM_PARTITION_RF_CAL_ADDR						0x3fb000
+#define SYSTEM_PARTITION_PHY_DATA_ADDR						0x3fc000
+#define SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR				0x3fd000
+#define SYSTEM_PARTITION_CUSTOMER_PRIV_PARAM_ADDR           0xfc000
+#else
+#error "The flash map is not supported"
+#endif
+
+
+
+
+
+static const partition_item_t at_partition_table[] =
+{
+    { SYSTEM_PARTITION_BOOTLOADER, 						0x0, 												0x1000},
+    { SYSTEM_PARTITION_RF_CAL,  						SYSTEM_PARTITION_RF_CAL_ADDR, 						0x1000},
+    { SYSTEM_PARTITION_PHY_DATA, 						SYSTEM_PARTITION_PHY_DATA_ADDR, 					0x1000},
+    { SYSTEM_PARTITION_SYSTEM_PARAMETER, 				SYSTEM_PARTITION_SYSTEM_PARAMETER_ADDR, 			0x3000},
+};
+
+void ICACHE_FLASH_ATTR user_pre_init(void)
+{
+    if(!system_partition_table_regist(at_partition_table, sizeof(at_partition_table)/sizeof(at_partition_table[0]),SPI_FLASH_SIZE_MAP))
+    {
+        HW_DEBUG("system_partition_table_regist fail\r\n");
+        while(1);
+    }
+}
+
+uint8_t uart_send_json(uint8_t *func,uint8_t *operate,uint8_t *status,uint8_t *para1,uint8_t *para2,uint8_t *para3,uint8_t *para4,uint8_t *para5)
+{
+    uint8_t *wifi_status_string;
+    cJSON *wifi_json_status = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(wifi_json_status, "FUNC", (const char*)func);
+    cJSON_AddStringToObject(wifi_json_status, "OPERATE", (const char*)operate);
+    cJSON_AddStringToObject(wifi_json_status, "STATUS", (const char*)status);
+
+    if(para1)
+        cJSON_AddStringToObject(wifi_json_status, "PARAM1", (const char*)para1);
+    if(para2)
+        cJSON_AddStringToObject(wifi_json_status, "PARAM2", (const char*)para2);
+    if(para3)
+        cJSON_AddStringToObject(wifi_json_status, "PARAM3", (const char*)para3);
+    if(para4)
+        cJSON_AddStringToObject(wifi_json_status, "PARAM4", (const char*)para4);
+    if(para5)
+        cJSON_AddStringToObject(wifi_json_status, "PARAM5", (const char*)para5);
+    wifi_status_string = (uint8_t *)cJSON_Print(wifi_json_status);
+
+    HW_DEBUG(wifi_status_string,os_strlen(wifi_status_string));
+
+    cJSON_Delete(wifi_json_status);
+    os_free(wifi_status_string);
+
+    return 0;
+}
+
+
+os_timer_t dht11_timer;
+void ICACHE_FLASH_ATTR dht11_timer_cb(void *timer_arg)
+{
+    dht11_data_t dht11_data = {0};
+    uint8_t temp_buffer[8] = {0};
+    uint8_t humi_buffer[8] = {0};
+
+    if(hw_dht11_read(&dht11_data) == HW_ERR_OK)
+    {
+        os_sprintf(humi_buffer,"%d.%d",dht11_data.humidity_h,dht11_data.humidity_l);
+        if(dht11_data.negative)
+        {
+            os_sprintf(temp_buffer,"-%d.%d",dht11_data.temperature_h,dht11_data.temperature_l);
+        }
+        else
+        {
+            os_sprintf(temp_buffer,"%d.%d",dht11_data.temperature_h,dht11_data.temperature_l);
+        }
+        uart_send_json("HW","DHT11_UPDATE","STATUS",humi_buffer,temp_buffer,0,0,0);
+    }
+    else
+        HW_DEBUG("dht11 read error\n");
+}
+
+
+#define OLED_SHOW_SIZE 32
+uint8_t func_show[OLED_SHOW_SIZE];
+uint8_t operate_show[OLED_SHOW_SIZE];
+uint8_t status_show[OLED_SHOW_SIZE];
+uint8_t key1_show[OLED_SHOW_SIZE];
+uint8_t key2_show[OLED_SHOW_SIZE];
+uint8_t key3_show[OLED_SHOW_SIZE];
+
+void operate_stauts_oled_show(uint8_t *func,uint8_t *operate,uint8_t *status,uint8_t *key1,uint8_t *value1,uint8_t *key2,uint8_t *value2,uint8_t * key3,uint8_t *value3)
+{
+    hw_memset(func_show,0,OLED_SHOW_SIZE);
+    hw_memset(operate_show,0,OLED_SHOW_SIZE);
+    hw_memset(status_show,0,OLED_SHOW_SIZE);
+    hw_memset(key1_show,0,OLED_SHOW_SIZE);
+    hw_memset(key2_show,0,OLED_SHOW_SIZE);
+    hw_memset(key3_show,0,OLED_SHOW_SIZE);
+
+    hw_sprintf((char*)func_show,"FUC:%s",func);
+    hw_sprintf((char*)operate_show,"OPERATE:%s",operate);
+    hw_sprintf((char*)status_show,"STATUS:%s",status);
+
+    hw_oled_clear();
+    hw_oled_show_string(0,0,func_show,8);
+    hw_oled_show_string(0,1,operate_show,8);
+    hw_oled_show_string(0,2,status_show,8);
+
+    if(key1 && value1)
+    {
+        hw_sprintf((char*)key1_show,"%s:%s",key1,value1);
+        hw_oled_show_string(0,3,key1_show,8);
+    }
+
+    if(key2 && value2)
+    {
+        hw_sprintf((char*)key2_show,"%s:%s",key2,value2);
+        hw_oled_show_string(0,4,key2_show,8);
+    }
+
+    if(key3 && value3)
+    {
+        hw_sprintf((char*)key3_show,"%s:%s",key3,value3);
+        hw_oled_show_string(0,4,key3_show,8);
+    }
+}
+
+uint8_t uart_receive_parse(uint8_t *shell_string)
+{
+    uint8_t result = HW_ERR_OK;
+    cJSON* parse_json = cJSON_Parse((const char *)shell_string);
+    uint8_t* func_value = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"FUNC"))->valuestring;
+    uint8_t* operate_value = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"OPERATE"))->valuestring;
+    uint8_t* para1 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM1"))->valuestring;
+    uint8_t* para2 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM2"))->valuestring;
+    uint8_t* para3 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM3"))->valuestring;
+    uint8_t* para4 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM4"))->valuestring;
+    uint8_t* para5 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM5"))->valuestring;
+    uint8_t* para6 = (uint8_t*)((cJSON *)cJSON_GetObjectItem(parse_json,"PARAM6"))->valuestring;
+
+    if(hw_strcmp((const char *)func_value,"HW") == 0)
+    {
+        if(hw_strcmp((const char *)operate_value,"LED_ON") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate LED_ON\n");
+            LED_ON;
+            operate_stauts_oled_show(func_value,operate_value,"SUCCESS",0,0,0,0,0,0);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"LED_OFF") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate LED_OFF\n");
+            LED_OFF;
+            operate_stauts_oled_show(func_value,operate_value,"SUCCESS",0,0,0,0,0,0);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"DHT11_START_UPDATE") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate DHT11_START_UPDATE\n");
+            os_timer_disarm(&dht11_timer);	/* 关闭定时器 */
+            os_timer_setfn(&dht11_timer,(os_timer_func_t *)dht11_timer_cb, NULL);
+            os_timer_arm(&dht11_timer, 2*1000, 1);  /* 使能定时器 */
+            operate_stauts_oled_show(func_value,operate_value,"SUCCESS",0,0,0,0,0,0);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"DHT11_STOP_UPDATE") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate DHT11_STOP_UPDATE\n");
+            os_timer_disarm(&dht11_timer);	/* 关闭定时器 */
+            operate_stauts_oled_show(func_value,operate_value,"SUCCESS",0,0,0,0,0,0);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_SHOW") == 0)
+        {
+            uint8_t col,page,format,string_len;
+            uint8_t show_string[32] = {0};
+
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_SHOW\n");
+            col = atoi((const char*)para1);
+            page = atoi((const char*)para2);
+            format = atoi((const char*)para3);
+            string_len = atoi((const char*)para4);
+            hw_memcpy(show_string,(const char*)para5,string_len);
+            hw_oled_show_string(col,page,show_string,format == 0?8:16);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_CLEAR") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_CLEAR\n");
+            hw_oled_clear();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_CONTRAST") == 0)
+        {
+            uint8_t contrast_value;
+
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_CONTRAST\n");
+            contrast_value = atoi((const char*)para1);
+
+            hw_oled_set_contrast(contrast_value);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_ENTRY_RAM") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_ENTRY_RAM\n");
+            hw_oled_entry_display_with_ram();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_ENTRY_NORAM") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_ENTRY_NORAM\n");
+            hw_oled_entry_display_without_ram();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_NORMAL_DISPLAY") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_NORMAL_DISPLAY\n");
+            hw_oled_set_normal_display();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_INVERSE_DISPLAY") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_INVERSE_DISPLAY\n");
+            hw_oled_set_inverse_display();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_H_SCROLL_SET") == 0)
+        {
+            uint8_t start_page,stop_page,dir,interval;
+
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_H_SCROLL_SET\n");
+            start_page = atoi((const char*)para1);
+            stop_page = atoi((const char*)para2);
+            dir = atoi((const char*)para3);
+            interval = atoi((const char*)para4);
+
+            hw_oled_set_horizontal_scroll(dir,start_page,stop_page,interval);
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_V_SCROLL_SET") == 0)
+        {
+            uint8_t start_page,stop_page,dir,interval,offset;
+
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_V_SCROLL_SET\n");
+            start_page = atoi((const char*)para1);
+            stop_page = atoi((const char*)para2);
+            dir = atoi((const char*)para3);
+            interval = atoi((const char*)para4);
+            offset = atoi((const char*)para5);
+
+            hw_oled_set_vertical_scroll(dir,start_page,stop_page,interval,offset);
+            goto exit;
+        }
+
+
+        if(hw_strcmp((const char *)operate_value,"OLED_SCROLL_START") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_SCROLL_START\n");
+            hw_oled_scroll_active();
+            goto exit;
+        }
+
+        if(hw_strcmp((const char *)operate_value,"OLED_SCROLL_STOP") == 0)
+        {
+            HW_DEBUG("UART PARSE DEBUG:operate OLED_SCROLL_START\n");
+            hw_oled_scroll_deactive();
+            goto exit;
+        }
+
+        result = HW_ERR_SHELL_NO_CMD;
+    }
+
+    if(hw_strcmp((const char *)shell_string,"shop220811498.taobao.com") == 0)
+        HW_DEBUG("welcome to use our stm32f1 camera wifi board\n");
+    else
+        HW_DEBUG("UART PARSE ERR:HW_ERR_SHELL_NO_CMD\n");
+
+    result = HW_ERR_SHELL_NO_CMD;
+exit:
+    cJSON_Delete(parse_json);
+    return result;
+}
+
+
+void ICACHE_FLASH_ATTR
+smartconfig_done(sc_status status, void *pdata)
+{
+    switch(status)
+    {
+    case SC_STATUS_WAIT:
+        os_printf("SC_STATUS_WAIT\n");
+        break;
+    case SC_STATUS_FIND_CHANNEL:
+        os_printf("SC_STATUS_FIND_CHANNEL\n");
+        break;
+    case SC_STATUS_GETTING_SSID_PSWD:
+        os_printf("SC_STATUS_GETTING_SSID_PSWD\n");
+        sc_type *type = pdata;
+        if (*type == SC_TYPE_ESPTOUCH)
+        {
+            os_printf("SC_TYPE:SC_TYPE_ESPTOUCH\n");
+        }
+        else
+        {
+            os_printf("SC_TYPE:SC_TYPE_AIRKISS\n");
+        }
+        break;
+    case SC_STATUS_LINK:
+        os_printf("SC_STATUS_LINK\n");
+        struct station_config *sta_conf = pdata;
+
+        wifi_station_set_config(sta_conf);
+        wifi_station_disconnect();
+        wifi_station_connect();
+        break;
+    case SC_STATUS_LINK_OVER:
+        os_printf("SC_STATUS_LINK_OVER\n");
+        if (pdata != NULL)
+        {
+            //SC_TYPE_ESPTOUCH
+            uint8 phone_ip[4] = {0};
+
+            os_memcpy(phone_ip, (uint8*)pdata, 4);
+            os_printf("Phone ip: %d.%d.%d.%d\n",phone_ip[0],phone_ip[1],phone_ip[2],phone_ip[3]);
+        }
+        else
+        {
+            //SC_TYPE_AIRKISS - support airkiss v2.0
+        }
+        smartconfig_stop();
+        break;
+    }
+
+}
+
+LOCAL void ICACHE_FLASH_ATTR hw_button_short_press(void)
+{
+	struct softap_config ap_config;
+    HW_DEBUG("hw_button_short_press\n");
+    wifi_set_opmode(SOFTAP_MODE);
+    os_strcpy(ap_config.ssid,ESP8266_AP_SSID);		// 设置SSID(将字符串复制到ssid数组)
+    os_strcpy(ap_config.password,ESP8266_AP_PASS);	// 设置密码(将字符串复制到password数组)
+    ap_config.ssid_len=os_strlen(ESP8266_AP_SSID);	// 设置ssid长度(和SSID的长度一致)
+    ap_config.channel=1;                      		// 通道号1～13
+    ap_config.authmode=AUTH_WPA2_PSK;           	// 设置加密模式
+    ap_config.ssid_hidden=0;                  		// 不隐藏SSID
+    ap_config.max_connection=4;               		// 最大连接数
+    ap_config.beacon_interval=100;            		// 信标间隔时槽100～60000 ms
+    wifi_softap_set_config(&ap_config);				// 设置soft-AP，并保存到Flash
+}
+
+#define		ESP8266_AP_SSID	"WIRELESS_LINK" /* wifi 名称 */
+#define		ESP8266_AP_PASS	"12345678"		/* wifi 密码 */
+LOCAL void ICACHE_FLASH_ATTR hw_button_long_press(void)
+{
+    
+    HW_DEBUG("hw_button_long_press\n");
+}
+
+
+/******************************************************************************
+ * FunctionName : user_init
+ * Description  : entry of user application, init user function here
+ * Parameters   : none
+ * Returns      : none
+*******************************************************************************/
+void ICACHE_FLASH_ATTR
+user_init(void)
+{
+    struct station_config sta_config;
+
+    uart_init(BIT_RATE_115200,BIT_RATE_115200);
+    hw_led_init();
+    hw_button_init(hw_button_short_press,hw_button_long_press);
+    hw_oled_init();
+    hw_dht11_init();
+
+    HW_DEBUG("\n---------------------------\n");
+    HW_DEBUG("This is esp8266 nonos hw test project\n");
+    HW_DEBUG("---------------------------\n");
+}
+
